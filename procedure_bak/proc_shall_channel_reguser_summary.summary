@@ -1,0 +1,888 @@
+CREATE DEFINER=`root`@`%` PROCEDURE `proc_shall_channel_reguser_summary`(IN p_start_time INT, IN p_end_time INT, IN p_seconds INT, IN p_IPnum INT, OUT o_done INT)
+label_pro:
+	BEGIN
+
+		
+		
+		
+		
+		
+	 
+		
+
+		DECLARE v_cal_dt      INT DEFAULT 0; 
+		DECLARE v_partner_num INT DEFAULT 0; 
+		DECLARE v_reg_num     INT DEFAULT 0; 
+		DECLARE v_last_uid    INT DEFAULT 0; 
+		DECLARE v_max_uid     INT DEFAULT 0; 
+
+		DECLARE v_step1_num   INT DEFAULT 0; 
+		DECLARE v_step2_num   INT DEFAULT 0; 
+		DECLARE v_step3_num   INT DEFAULT 0; 
+		DECLARE v_valid_num   INT DEFAULT 0; 
+
+		
+		SELECT count(0)   INTO    v_partner_num  FROM    shall_partner_def WHERE   `type` = 3    AND `status` = 1;
+		
+		IF v_partner_num = 0 THEN
+			SET o_done = 0; 
+			LEAVE label_pro;
+		END IF;
+
+		
+
+		
+		SELECT p_start_time  INTO    v_cal_dt;
+
+		
+		delete from shall_channel_daily_detail  where  dt=DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d');
+		delete from shall_channel_daily_summary where  dt=DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d');
+		delete from shall_channel_invalid_reguser_total where  dt=DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d');
+		delete from shall_channel_reguser_daily_summary where  dt=DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d');
+	
+
+		TRUNCATE shall_channel_reguser_tmp;
+		TRUNCATE shall_channel_reguser_tmp1;
+		TRUNCATE shall_channel_reguser_ip_filter;
+		TRUNCATE shall_channel_reguser_deviveToken_filter;
+		INSERT INTO shall_channel_reguser_ip_filter (regip)
+		SELECT s.lastip				
+		FROM
+			cust_user u, cust_user_status s
+		WHERE
+			 u.uid = s.uid
+	 AND u.uid > 79600000
+	 AND u.cr_dt > p_start_time-10*24*3600
+	 AND u.cr_dt < p_end_time-24*3600
+	 group by s.lastip;
+	
+	INSERT INTO shall_channel_reguser_deviveToken_filter (deviceToken)
+		SELECT s.macaddr				
+		FROM
+			cust_user u, cust_user_status s
+		WHERE
+			 u.uid = s.uid
+	 AND u.uid > 79600000
+	 AND u.cr_dt > p_start_time-10*24*3600
+	 AND u.cr_dt < p_end_time-24*3600
+	 group by s.macaddr;
+
+	
+	 INSERT INTO shall_channel_reguser_tmp1 (uid, cr_dt, lastactivity_time, regip, deviceToken, channelid, partner_id, showid)
+		SELECT u.uid
+				 , u.cr_dt
+				 , s.lastactivitytime
+				 , s.lastip
+				 , s.macaddr
+				 , u.channelid  
+				 , 100000
+				 , u.showid
+		FROM
+			cust_user u, cust_user_status s,cust_user_profile p
+		WHERE
+			 u.uid = s.uid
+			AND u.uid > 79600000
+    AND u.uid=p.uid
+    AND (p.nickname not like '%共用出口%' or p.nickname not like '%机房%') 
+			AND u.cr_dt > p_start_time
+			AND u.cr_dt < p_end_time;
+
+
+
+
+		### save his for filtered device
+		INSERT INTO shall_channel_reguser_ip_history (channel_id, num, dateline)
+      SELECT t.channelid, count(0),unix_timestamp(now()) FROM shall_channel_reguser_tmp1 t
+      LEFT JOIN shall_channel_reguser_ip_filter i ON t.regip = i.regip WHERE i.id IS NOT NULL
+      GROUP BY t.channelid;
+
+    INSERT INTO shall_channel_reguser_deviceToken_history (channel_id, num, dateline)
+      SELECT t.channelid,count(0),unix_timestamp(now()) from shall_channel_reguser_tmp1  t 
+        left join shall_channel_reguser_deviveToken_filter i on t.deviceToken=i.deviceToken where i.id is not null 
+        GROUP BY t.channelid;
+
+
+
+			## del 
+     delete t from shall_channel_reguser_tmp1  t left join shall_channel_reguser_ip_filter i on t.regip=i.regip where i.id is not null;
+	  delete t from shall_channel_reguser_tmp1  t left join shall_channel_reguser_deviveToken_filter i on t.deviceToken=i.deviceToken where i.id is not null;
+		
+		INSERT INTO shall_channel_reguser_tmp (uid, cr_dt, lastactivity_time, regip, deviceToken, channelid, partner_id, showid)
+		SELECT u.uid
+				 , u.cr_dt
+				 , u.lastactivity_time
+				 , u.regip
+				 , u.deviceToken
+				 , u.channelid
+				 , d.partner_id
+				 , u.showid
+		FROM
+			shall_channel_reguser_tmp1 u, shall_partner_def d
+		WHERE
+			u.channelid like d.channelid
+			
+			AND d.type = 3
+			AND d.`status` = 1
+			AND u.uid > 79600000
+			AND u.cr_dt > p_start_time
+			AND u.cr_dt < p_end_time;	
+
+		
+		SELECT count(0)  INTO    v_reg_num  FROM    shall_channel_reguser_tmp;
+		SELECT max(uid)  INTO    v_max_uid  FROM    shall_channel_reguser_tmp;
+
+		
+		IF v_reg_num = 0 THEN
+			SET o_done = 1;
+			LEAVE label_pro;
+		END IF;
+
+		
+	 
+
+		
+		UPDATE shall_channel_reguser_tmp tmp,
+			(
+			SELECT t0.id, @num := if(@regip = t0.regip, @num + 1, 1) AS cal_rank, @regip := t0.regip
+			FROM
+				(
+				SELECT t.id, t.regip,t.step1_status,t.step2_status
+				FROM
+					shall_channel_reguser_tmp t
+				ORDER BY
+					t.regip
+				) t0,
+				(
+				SELECT count(0) AS user_num , regip
+				FROM
+					shall_channel_reguser_tmp
+				GROUP BY
+					regip
+				HAVING
+					user_num > p_IPnum
+				) t1,
+				(SELECT @num := 0) t2,
+				(SELECT @regip := '') t3
+			WHERE
+				t0.regip = t1.regip
+
+			) t4
+		SET
+			tmp.step3_status = 1
+		WHERE
+			tmp.id = t4.id
+			AND t4.cal_rank > p_IPnum;
+
+
+		
+		UPDATE shall_channel_reguser_tmp t,
+			(SELECT count(0) AS user_num
+						, deviceToken
+			 FROM
+				 shall_channel_reguser_tmp
+			 WHERE
+				 step3_status = 0
+			 GROUP BY
+				 deviceToken
+			 HAVING
+				 user_num > 1) t1
+		SET
+			t.step2_status = 1
+		WHERE
+			t.deviceToken = t1.deviceToken
+			AND t.step3_status = 0;
+
+		
+		UPDATE shall_channel_reguser_tmp t,
+			(
+			SELECT count(0) AS user_num
+					 , min(uid) AS uid
+			FROM
+				shall_channel_reguser_tmp
+			WHERE
+				step3_status = 0
+			GROUP BY
+				deviceToken
+			HAVING
+				user_num > 1
+			) t1
+		SET
+			t.step2_status = 0
+		WHERE
+			t.uid = t1.uid
+			AND t.step3_status = 0
+			AND t.step2_status = 1;
+
+
+
+
+		#Modified at 2015.09.18
+		#ios改为4分钟
+		#Modified at 2015.10.12
+		#ios由原先4分钟，恢复到3分钟   t.lastactivity_time - t.cr_dt < 240 -> t.lastactivity_time - t.cr_dt < 180  
+		UPDATE shall_channel_reguser_tmp t
+		SET
+			t.step1_status = 1
+		WHERE
+			t.lastactivity_time - t.cr_dt < p_seconds
+			AND t.step3_status = 0
+			AND t.step2_status = 0
+			AND LEFT(channelid, 5) <> '10102'
+			AND LEFT(channelid, 5) <> '10135';
+
+		UPDATE shall_channel_reguser_tmp t
+		SET
+			t.step1_status = 1
+		WHERE
+			t.lastactivity_time - t.cr_dt < 180
+			AND t.step3_status = 0
+			AND t.step2_status = 0
+			AND (LEFT(channelid, 5) = '10102' OR LEFT(channelid, 5) = '10135');
+
+
+		
+		SELECT count(0)  INTO    v_step1_num  FROM    shall_channel_reguser_tmp  WHERE    step1_status = 1;
+		SELECT count(0)  INTO    v_step2_num  FROM    shall_channel_reguser_tmp  WHERE    step2_status = 1;
+		SELECT count(0)  INTO    v_step3_num  FROM    shall_channel_reguser_tmp  WHERE    step3_status = 1;
+		SELECT count(0)  INTO    v_valid_num  FROM    shall_channel_reguser_tmp  WHERE    step1_status = 0    AND step2_status = 0    AND step3_status = 0;
+
+		
+		
+		INSERT INTO shall_channel_reguser_daily_summary (dt, cal_dt, reg_total, user_num, shep1, shep2, shep3) 
+			 VALUE (DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d'), v_cal_dt, v_reg_num, v_valid_num, v_step1_num, v_step2_num, v_step3_num)
+		ON DUPLICATE KEY UPDATE
+			cal_dt = v_cal_dt, reg_total = v_reg_num, user_num = v_valid_num, shep1 = v_step1_num, shep2 = v_step2_num, shep3 = v_step3_num;
+
+
+		
+		INSERT INTO shall_channel_invalid_reguser_total (uid, dt, cr_dt, lastactivity_time, regip, deviceToken, channelid, step1_status, step2_status, step3_status)
+		SELECT uid
+				 , DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d')
+				 , cr_dt
+				 , lastactivity_time
+				 , regip
+				 , deviceToken
+				 , channelid
+				 , step1_status
+				 , step2_status
+				 , step3_status
+		FROM
+			shall_channel_reguser_tmp
+		WHERE
+			step1_status = 1
+			OR step2_status = 1
+			OR step3_status = 1;
+
+		
+		INSERT INTO shall_channel_daily_summary (partner_id, dt, cal_dt, user_num, price, type)
+		SELECT d.partner_id
+				 , DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d')
+				 , v_cal_dt
+				 , floor(t.usernum * (1 - d.cut_rate / 100))
+				 , d.price
+				 , d.type
+		FROM
+			shall_partner_def d,
+			(
+			SELECT count(0) AS usernum
+					 , partner_id
+			FROM
+				shall_channel_reguser_tmp
+			WHERE
+				step1_status = 0
+				AND step2_status = 0
+				AND step3_status = 0
+			GROUP BY
+				partner_id
+			) t
+		WHERE
+			d.partner_id = t.partner_id
+		ON DUPLICATE KEY UPDATE
+			user_num = floor(t.usernum * (1 - d.cut_rate / 100));
+
+
+		
+		UPDATE shall_channel_daily_summary s,
+			(
+			SELECT t.partner_id  , ifnull(t.step_0, 0) AS step_0
+					 , ifnull(t1.step_1, 0) AS step_1
+					 , ifnull(t2.step_2, 0) AS step_2
+					 , ifnull(t3.step_3, 0) AS step_3
+			FROM
+				(
+						(SELECT count(0) AS step_0, partner_id FROM  shall_channel_reguser_tmp GROUP BY partner_id) t
+						LEFT JOIN (         
+							SELECT count(0) AS step_1, partner_id FROM  shall_channel_reguser_tmp
+							WHERE  step1_status = 1
+							GROUP BY partner_id
+						) t1    ON t.partner_id = t1.partner_id 
+						LEFT JOIN (
+							SELECT count(0) AS step_2, partner_id FROM  shall_channel_reguser_tmp
+							WHERE  step2_status = 1
+							GROUP BY  partner_id
+						) t2  ON t.partner_id = t2.partner_id
+						LEFT JOIN (
+							SELECT count(0) AS step_3  , partner_id  FROM  shall_channel_reguser_tmp  
+							WHERE step3_status = 1     
+							GROUP BY  partner_id
+						) t3  ON t.partner_id = t3.partner_id
+
+				)
+			) t4
+		SET
+			step0 = t4.step_0, step1 = t4.step_1, step2 = t4.step_2, step3 = t4.step_3
+		WHERE
+			s.partner_id = t4.partner_id
+			AND s.dt = DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d');
+
+
+		
+		INSERT INTO shall_channel_daily_detail (partner_id, dt, cal_dt, showid, uid, cr_dt, regip, deviceToken, channelid)
+		SELECT partner_id
+				 , DATE_FORMAT(from_unixtime(v_cal_dt), '%Y%m%d')
+				 , v_cal_dt
+				 , showid
+				 , uid
+				 , cr_dt
+				 , regip
+				 , deviceToken
+				 , channelid
+		FROM
+			shall_channel_reguser_tmp
+		WHERE
+			step1_status = 0
+			AND step2_status = 0
+			AND step3_status = 0;
+
+		
+		
+		
+		
+		
+		delete from shall_subchannel_daily_summary_internal where dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d');
+
+		insert into shall_subchannel_daily_summary_internal (partner_id, channelid, dt, cal_dt, unit, unit_price, total, ext1, ext2)
+		select tt0.partner_id, tt0.channelid, tt0.dt, UNIX_TIMESTAMP(), ceil(tt0.tol*tt0.discount), tt2.price, ceil(tt0.tol*tt0.discount)*tt2.price, tt0.discount, tt0.tol
+		from
+		(
+		select t1.dt, t1.channelid, t1.tol, t2.grade, t2.discount, t1.partner_id
+		from
+		(select dt, channelid, partner_id, count(*) as tol from shall_channel_daily_detail 
+		where dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d') 
+		group by dt, channelid) t1,
+		shall_partner_channel_discount t2
+		where t1.channelid like t2.channelid
+		)tt0,
+		(
+		select t1.dt, t1.channelid, max(t2.grade) grd
+		from
+		(select dt, channelid, partner_id, count(*) as tol from shall_channel_daily_detail 
+		where dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d') 
+		group by dt, channelid) t1,
+		shall_partner_channel_discount t2
+		where t1.channelid like t2.channelid 
+		group by t1.dt, t1.channelid
+		)tt1,
+		shall_partner_def tt2
+		where tt0.dt=tt1.dt and tt0.channelid=tt1.channelid and tt0.grade=tt1.grd and tt2.partner_id=tt0.partner_id;
+
+		
+
+		
+		
+    
+
+		update   shall_channel_reguser_tmp t1,
+		(
+			select t.id,if(h.id>0,1,0) as is_talk 
+			from  shall_channel_reguser_tmp  t  
+			inner join  shall_cust_user_chat_his_full h on t.uid=h.from_uid  and   h.dateline > p_start_time and h.dateline < p_end_time
+			GROUP BY t.uid
+		) t2
+		set t1.is_talk=t2.is_talk where t1.id=t2.id ;
+
+
+		update  shall_subchannel_daily_summary_internal s,
+		(
+			SELECT count(0) as talk_num,t.channelid,t.partner_id 
+			from shall_channel_reguser_tmp  t  where  t.is_talk=1 
+			GROUP BY t.partner_id, t.channelid
+		)t1
+		set s.talk_num=t1.talk_num
+		where s.partner_id=t1.partner_id and s.channelid=t1.channelid
+    and s.dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d');
+
+
+		
+		
+		
+		
+    /* wesley comment 2015-8-2 
+    delete from shall_subchannel_daily_summary_internal where channelid='s10202660206914' and dt=20140925;
+		insert into shall_subchannel_daily_summary_internal values (null, 400160, 's10202660206914', 20140925, UNIX_TIMESTAMP(), 44, 2, 44*2, 1, 44,0,0,0);
+		*/
+    
+		
+
+		
+		update  shall_channel_reguser_tmp t, cust_user u 
+		set t.is_qq=1 
+		where t.uid=u.uid and (u.qqstatus=1 or u.renrenstatus=1);
+
+
+		
+		update  shall_subchannel_daily_summary_internal s,
+		(
+			SELECT count(0) as qq_num,t.channelid,t.partner_id 
+			from shall_channel_reguser_tmp  t  where  t.is_qq=1 
+			GROUP BY t.partner_id, t.channelid
+		)t1
+		set s.qq_num=t1.qq_num,s.qq_rate=t1.qq_num/s.unit*100 
+		where s.partner_id=t1.partner_id and s.channelid=t1.channelid
+		and s.dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d');
+
+
+		/**
+		* 需求说明: 把安卓版本号>=7.5.3的QQ_Rate两个参数调整为40 和 1，其他的仍然维持以前数值即50和5
+		* 修改说明: 2015-08-12
+		* 修改时间: 2015-08-12
+		* 修改人: 晓斌
+		* 修改说明: 结算规则调整(安卓2163父渠道去掉QQ登录限制)
+		* 修改时间: 2015-11-02
+		*/
+
+		UPDATE shall_subchannel_daily_summary_internal
+		SET unit = 0, total=0
+		WHERE qq_rate<5 and unit>10 and ext1>=0.5 and dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d')
+		AND LEFT(channelid, 5) <> '10102'
+		AND LEFT(channelid, 5) <> '10135'
+		AND NOT (LOCATE('s', channelid) = 1 AND SUBSTRING(channelid, -6, 4) = '2163'); 
+
+		UPDATE shall_subchannel_daily_summary_internal 
+		SET unit = ceil(unit*(qq_rate*2-10)/100)
+		WHERE (qq_rate BETWEEN 1 AND 5)
+		  AND LOCATE('s', channelid) = 1 AND SUBSTRING(channelid, -9, 3) >= '753'
+	    AND unit>10 and ext1>=0.5 and dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d')
+			AND LEFT(channelid, 5) <> '10102'
+			AND LEFT(channelid, 5) <> '10135'
+			AND NOT (LOCATE('s', channelid) = 1 AND SUBSTRING(channelid, -6, 4) = '2163'); 
+
+		UPDATE shall_subchannel_daily_summary_internal 
+		SET unit = ceil(unit*(qq_rate*2-10)/100)
+		WHERE IF(LOCATE('s', channelid) = 1 AND SUBSTRING(channelid, -9, 3) >= '753', qq_rate BETWEEN 1 AND 40, qq_rate BETWEEN 5 AND 50)
+		  AND unit>15 AND ext1>=0.5 AND dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d')
+			AND LEFT(channelid, 5) <> '10102'
+			AND LEFT(channelid, 5) <> '10135'
+			AND NOT (LOCATE('s', channelid) = 1 AND SUBSTRING(channelid, -6, 4) = '2163'); 
+		
+		update shall_subchannel_daily_summary_internal set total=unit*unit_price where dt=FROM_UNIXTIME(UNIX_TIMESTAMP(current_date()-interval 1 day),'%Y%m%d'); 
+
+		SET o_done = 10;
+
+
+	END
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	CREATE DEFINER=`root`@`%` PROCEDURE `showself_statistics_create_user_consume_proc`()
+BEGIN
+DECLARE v_done 	  			  	INT DEFAULT 0;	#变量
+	DECLARE p_id 								INT DEFAULT 0; 	#主键
+  DECLARE p_start_time 				INT DEFAULT 0; 	#开始时间
+	DECLARE p_end_time 					INT DEFAULT 0;	#结束时间
+  DECLARE p_period 	  				INT DEFAULT 0;	#执行周期
+  DECLARE p_target_table    	VARCHAR(250) DEFAULT '';  #生成数据的表
+  DECLARE p_target_new_table  VARCHAR(250) DEFAULT '';  #分表表
+	DECLARE p_sql    						VARCHAR(1024) DEFAULT '';  #sql
+	DECLARE p_part_sql    			VARCHAR(255) DEFAULT '';  #sql
+
+	#声明游标
+	DECLARE v_new_statistics_cursor CURSOR FOR
+	SELECT id,start_time,end_time,period,target_table FROM showself_statistics_task_def 
+	WHERE proc_name='showself_statistics_create_user_consume_proc' AND UNIX_TIMESTAMP() >=end_time AND `status`=1;
+
+
+  #############################################################################
+  #                           生成用户消费明细表
+  #############################################################################
+  -- 声明游标的异常处理，设置一个终止标记 
+  DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET v_done=1; 
+	
+	SET p_part_sql="  (uid,roomid,year,month,day,hour,dateline,create_time,device_type,idfa,hash_idfa,channel_id,hash_channel_id,channel_name,hash_channel_name,
+		consume_coin,consume_type,consume_type_son,consume_id,consume_num,dj_hot,dj_diamond,anchor_uid) ";
+
+  SET v_done = 0; ## 
+	
+  OPEN v_new_statistics_cursor;
+	
+  REPEAT
+    FETCH v_new_statistics_cursor INTO p_id,p_start_time,p_end_time,p_period,p_target_table ;
+
+    IF NOT v_done THEN
+
+			###分表操作
+			SET p_target_new_table=CONCAT(p_target_table,"_",FROM_UNIXTIME(p_start_time,'%Y%m'));
+
+			SET @p_sql := CONCAT("CREATE TABLE IF NOT EXISTS ",p_target_new_table," LIKE ",p_target_table,";");					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT;	
+
+			#秀场道具
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+					SELECT u.uid,
+						 0 AS roomid ,
+						 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+						 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+						 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+						 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+						 u.dateline AS dateline,
+						 UNIX_TIMESTAMP() AS create_time,
+						 0 AS device_type,
+						 0 AS idfa,
+						 0 AS hash_idfa,
+						 0 AS channelid,
+						 0 AS hash_channel_id,
+						 '' AS channel_name,
+						 0 AS hash_channel_name ,
+						 u.spend AS consume_coin,
+						 10 AS consume_type,
+						 u.category AS consume_type_son,
+						 u.admin_prop_id AS consume_id,
+						 u.total AS consume_num,
+						 FLOOR(pd.price/2) AS dj_hot,
+						 FLOOR(pd.price/2) AS dj_diamond,
+						 u.fuid AS anchor_uid
+			FROM
+				(SELECT SUM(total) total,
+								uid,
+								admin_prop_id,
+								category,
+								SUM(spend) spend,
+								dateline,
+								fuid
+				 FROM imeeta_utf8.cust_user_store_prop_action
+				 WHERE category IN (5,6)
+					AND dateline BETWEEN ",p_start_time," AND ",p_end_time,  
+					"  GROUP BY category,uid,fuid) u,imeeta_utf8.admin_store_prop_def pd
+			WHERE u.admin_prop_id=pd.admin_prop_id ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+		#秀色道具
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+					SELECT u.uid,
+						 0 AS roomid ,
+						 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+						 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+						 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+						 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+						 u.dateline AS dateline,
+						 UNIX_TIMESTAMP() AS create_time,
+						 0 AS device_type,
+						 0 AS idfa,
+						 0 AS hash_idfa,
+						 0 AS channelid,
+						 0 AS hash_channel_id,
+						 '' AS channel_name,
+						 0 AS hash_channel_name ,
+						 u.spend AS consume_coin,
+						 20 AS consume_type,
+						 u.category AS consume_type_son,
+						 u.admin_prop_id AS consume_id,
+						 u.total AS consume_num,
+						 FLOOR(pd.price/2) AS dj_hot,
+						 FLOOR(pd.price/2) AS dj_diamond,
+						 u.fuid AS anchor_uid
+			FROM
+				(SELECT SUM(total) total,
+								uid,
+								admin_prop_id,
+								category,
+								SUM(spend) spend,
+								dateline,
+								fuid
+				 FROM imeeta_utf8.cust_user_store_prop_action
+				 WHERE (category NOT IN (4,5,6) OR (category=4 AND fuid=uid))
+					AND dateline BETWEEN ",p_start_time," AND ",p_end_time,  
+					"  GROUP BY category,uid,fuid) u,imeeta_utf8.admin_store_prop_def pd
+			WHERE u.admin_prop_id=pd.admin_prop_id ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+#砸蛋消费
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+					SELECT u.uid,
+								 u.roomid ,
+								 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+								 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+								 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+								 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+								 u.dateline AS dateline,
+								 UNIX_TIMESTAMP() as create_time,
+								 0 AS device_type,
+								 0 AS idfa,
+								 0 AS hash_idfa,
+								 0 AS channelid,
+								 0 AS hash_channel_id,
+								 '' AS channel_name,
+								 0 AS hash_channel_name ,
+								u.spend_money as consume_coin,
+								11 as consume_type,
+								u.gameid as consume_type_son,
+								u.admin_gift_id as consume_id,
+								u.gift_num as consume_num,
+								0 as dj_hot,
+								0 as dj_diamond,
+								0 as anchor_uid
+					FROM imeeta_utf8.shall_cust_game u 
+					WHERE u.gameid IN (1,3,5) AND u.dateline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+#秀场礼物 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+				SELECT u.sender as uid,
+							 u.roomid ,
+							 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+							 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+							 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+							 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+							 u.dateline AS dateline,
+							 UNIX_TIMESTAMP() as create_time,
+							 0 AS device_type,
+							 0 AS idfa,
+							 0 AS hash_idfa,
+							 0 AS channelid,
+							 0 AS hash_channel_id,
+							 '' AS channel_name,
+							 0 AS hash_channel_name ,
+							u.spendmoney as consume_coin,
+							12 as consume_type,
+							u.cust_gift_id as consume_type_son,
+							u.admin_gift_id as consume_id,
+							u.realnum as consume_num,
+							FLOOR(u.spendmoney/2) as dj_hot,
+							FLOOR(u.spendmoney/2) as dj_diamond,
+							u.uid as anchor_uid
+				FROM imeeta_utf8.shall_cust_user_rcv_gift u
+					WHERE u.note<>'bag' and u.dateline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+		#秀色礼物 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+				SELECT u.sender AS uid,
+							 0 AS roomid ,
+							 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+							 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+							 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+							 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+							 u.dateline AS dateline,
+							 UNIX_TIMESTAMP() AS create_time,
+							 0 AS device_type,
+							 0 AS idfa,
+							 0 AS hash_idfa,
+							 0 AS channelid,
+							 0 AS hash_channel_id,
+							 '' AS channel_name,
+							 0 AS hash_channel_name ,
+							 (u.num*g.cost) AS consume_coin,
+							 21 AS consume_type,
+							 0  AS consume_type_son,
+							 u.admin_gift_id AS consume_id,
+							 u.num AS consume_num,
+							 0 AS dj_hot,
+							 FLOOR(u.num*g.cost/2) AS dj_diamond,
+							 u.uid AS anchor_uid
+				FROM
+					(SELECT COUNT(0) num,
+									sender,
+									uid,
+									admin_gift_id,
+									dateline
+					 FROM imeeta_utf8.cust_user_rcv_gift
+				WHERE admin_gift_id <> 9999 AND dateline BETWEEN ",p_start_time," AND ",p_end_time,
+				" AND sender <>3000096
+					 GROUP BY admin_gift_id,sender,uid) u ,imeeta_utf8.admin_store_gifts g
+				WHERE u.admin_gift_id=g.giftid;");
+					 
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+#秀色开通会员 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+				SELECT u.uid as uid,
+							 0 as roomid ,
+							 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+							 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+							 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+							 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+							 u.dateline AS dateline,
+							 UNIX_TIMESTAMP() as create_time,
+							 0 AS device_type,
+							 0 AS idfa,
+							 0 AS hash_idfa,
+							 0 AS channelid,
+							 0 AS hash_channel_id,
+							 '' AS channel_name,
+							 0 AS hash_channel_name ,
+							u.money as consume_coin,
+							22 as consume_type,
+							u.vip as consume_type_son,
+							0 as consume_id,
+							1 as consume_num,
+							0 as dj_hot,
+							0 as dj_diamond,
+							0 as anchor_uid
+				FROM imeeta_utf8.cust_user_order_vip u
+					WHERE u.dateline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+
+	#秀场点歌消费 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+				SELECT u.uid as uid,
+							 u.roomid as roomid ,
+							 YEAR(FROM_UNIXTIME(u.dataline)) AS `year`,
+							 month(FROM_UNIXTIME(u.dataline)) AS `month`,
+							 day(FROM_UNIXTIME(u.dataline)) AS `day`,
+							 hour(FROM_UNIXTIME(u.dataline)) AS `hour`,
+							 u.dataline AS dateline,
+							 UNIX_TIMESTAMP() as create_time,
+							 0 AS device_type,
+							 0 AS idfa,
+							 0 AS hash_idfa,
+							 0 AS channelid,
+							 0 AS hash_channel_id,
+							 '' AS channel_name,
+							 0 AS hash_channel_name ,
+							u.coin as consume_coin,
+							13 as consume_type,
+							0 as consume_type_son,
+							0 as consume_id,
+							1 as consume_num,
+							FLOOR(u.coin/2) as dj_hot,
+							FLOOR(u.coin/2) as dj_diamond,
+							0 as anchor_uid
+				FROM imeeta_utf8.shall_cust_anchor_song_list u
+					WHERE u.`status` =2 and u.dataline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+	#秀色送皇冠礼物消费 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"    
+				SELECT u.uid as uid,
+							 0 as roomid ,
+							 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+							 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+							 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+							 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+							 u.dateline AS dateline,
+							 UNIX_TIMESTAMP() as create_time,
+							 0 AS device_type,
+							 0 AS idfa,
+							 0 AS hash_idfa,
+							 0 AS channelid,
+							 0 AS hash_channel_id,
+							 '' AS channel_name,
+							 0 AS hash_channel_name ,
+							u.cost as consume_coin,
+							23 as consume_type,
+							u.ref_giftid as consume_type_son,
+							0 as consume_id,
+							1 as consume_num,
+							0 as dj_hot,
+							0 as dj_diamond,
+							u.fuid as anchor_uid
+				FROM imeeta_utf8.cust_user_auction_summary u
+					WHERE u.`status` =1 and u.dateline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+	
+			#秀场红包消费 
+			SET @p_sql := CONCAT("INSERT INTO ",p_target_new_table,p_part_sql,
+			"SELECT u.send_uid as uid,
+									 u.roomid as roomid ,
+									 YEAR(FROM_UNIXTIME(u.dateline)) AS `year`,
+									 month(FROM_UNIXTIME(u.dateline)) AS `month`,
+									 day(FROM_UNIXTIME(u.dateline)) AS `day`,
+									 hour(FROM_UNIXTIME(u.dateline)) AS `hour`,
+									 u.dateline AS dateline,
+									 UNIX_TIMESTAMP() as create_time,
+									 0 AS device_type,
+									 0 AS idfa,
+									 0 AS hash_idfa,
+									 0 AS channelid,
+									 0 AS hash_channel_id,
+									 '' AS channel_name,
+									 0 AS hash_channel_name ,
+									IF(u.type=1,u.amount,(0-u.amount)) as consume_coin,
+									14 as consume_type,
+									u.type as consume_type_son,
+									0 as consume_id,
+									1 as consume_num,
+									0 as dj_hot,
+									0 as dj_diamond,
+									0 as anchor_uid
+						FROM imeeta_utf8.shall_game_red_packet_log u
+						WHERE u.type IN (1,3)
+					 and u.dateline BETWEEN ",p_start_time," AND ",p_end_time," ;");
+					
+				PREPARE STMT FROM @p_sql;   
+				EXECUTE STMT; 
+
+
+			UPDATE showself_statistics_task_def SET start_time=p_end_time+1,end_time=p_end_time+(p_period*60*60), update_time=UNIX_TIMESTAMP() WHERE id=p_id;
+     
+
+
+
+				###############更新用户消费总表:   监控系统使用
+					SET @p_sql := CONCAT("insert into showself_monitor_consume_total (uid, money, dateline, white_list)
+								SELECT uid, new_money, dateline, white_list FROM (
+								SELECT uid, SUM(consume_coin)/100 AS new_money, UNIX_TIMESTAMP() AS dateline, 0 AS white_list FROM ",p_target_new_table,"
+										WHERE uid <> 3000006 and consume_coin>0 
+												AND dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+								GROUP BY uid
+							) AS t
+								ON DUPLICATE KEY UPDATE money = money + t.new_money, chg_dt = UNIX_TIMESTAMP();");
+							 
+					PREPARE STMT FROM @p_sql;   
+					EXECUTE STMT;
+
+
+    END IF;
+  UNTIL v_done 
+  END REPEAT;
+
+  CLOSE v_new_statistics_cursor;
+
+
+END

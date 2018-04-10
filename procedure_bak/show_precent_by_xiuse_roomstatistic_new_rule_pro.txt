@@ -1,0 +1,473 @@
+CREATE  PROCEDURE `xiuse_roomstatistic_proc`()
+BEGIN
+  DECLARE v_done                  INT DEFAULT 0;  #变量
+  DECLARE p_id                INT DEFAULT 0;  #主键
+  DECLARE p_start_time            INT DEFAULT 0;  #开始时间
+  DECLARE p_end_time            INT DEFAULT 0;  #结束时间
+  DECLARE p_period                INT DEFAULT 0;  #执行周期
+  DECLARE p_target_table            VARCHAR(250) DEFAULT '';  #生成数据的表
+  DECLARE p_target_new_table          VARCHAR(250) DEFAULT '';  #分表表
+  DECLARE p_sql                 VARCHAR(1024) DEFAULT ''; #sql
+   DECLARE v_new_statistics_cursor CURSOR FOR
+   SELECT id,start_time,end_time,period,target_table FROM showself_statistics_task_def 
+   WHERE proc_name='xiuse_roomstatistic_proc' AND UNIX_TIMESTAMP() >=end_time AND `status`=1;
+    
+  #############################################################################
+  #                                 准备临时表                                #
+  #############################################################################
+  DECLARE CONTINUE HANDLER FOR SQLSTATE '02000' SET v_done=1; 
+  
+  SET v_done = 0; ## 
+  
+  OPEN v_new_statistics_cursor;
+  
+  REPEAT
+    FETCH v_new_statistics_cursor INTO p_id,p_start_time,p_end_time,p_period,p_target_table ;
+    IF NOT v_done THEN
+    
+      TRUNCATE TABLE xiuse_consume_hu_tmp;
+		  IF FROM_UNIXTIME(p_start_time,'%Y%m')=FROM_UNIXTIME(p_end_time,'%Y%m') THEN
+			SET @p_sql := CONCAT("INSERT INTO xiuse_consume_hu_tmp()
+				SELECT NULL,uid,roomid,FROM_UNIXTIME(dateline,'%Y%m%d'),consume_coin,consume_type,consume_type_son,consume_id,anchor_uid 
+				FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_start_time,'%Y%m'),"  
+				WHERE roomid != 0 AND consume_coin != 0
+					AND dateline BETWEEN ",p_start_time," AND ",p_end_time," 
+        UNION ALL
+				SELECT NULL,uid,b.roomid,FROM_UNIXTIME(dateline,'%Y%m%d'),consume_coin,consume_type,consume_type_son,consume_id,a.anchor_uid 
+				FROM 
+        (SELECT uid,roomid,dateline,consume_coin,consume_type,consume_type_son,consume_id,anchor_uid
+        FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_start_time,'%Y%m'),"  
+        WHERE roomid = 0 AND consume_coin <> 0 AND consume_type  = 10 and consume_id  in (146,147)
+				AND dateline BETWEEN ",p_start_time," AND ",p_end_time,") a
+        INNER JOIN (SELECT roomid,anchor_uid from shall_rpt_anchor_workload_band_4realcal GROUP BY anchor_uid) b ON a.anchor_uid = b.anchor_uid
+				UNION ALL
+        SELECT  null,u.sender as uid,
+							 u.roomid,
+							 FROM_UNIXTIME(u.dateline,'%Y%m%d') AS dateline,
+							 u.spendmoney as consume_coin,
+							 15 as consume_type,
+							 u.cust_gift_id as consume_type_son,
+							 u.admin_gift_id as consume_id,
+							 u.uid as anchor_uid
+				FROM shall_cust_user_rcv_gift u
+				WHERE u.note = 'bag' and u.dateline BETWEEN  ",p_start_time," AND ",p_end_time,"
+				;");	
+			ELSE
+			SET @p_sql := CONCAT("INSERT INTO xiuse_consume_hu_tmp()
+				SELECT NULL,uid,roomid,FROM_UNIXTIME(dateline,'%Y%m%d'),consume_coin,consume_type,consume_type_son,consume_id,anchor_uid
+                FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_start_time,'%Y%m')," 
+                WHERE roomid <> 0 AND consume_coin <> 0 AND dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+                UNION ALL
+                SELECT NULL,uid,roomid,FROM_UNIXTIME(dateline,'%Y%m%d'),consume_coin,consume_type,consume_type_son,consume_id,anchor_uid
+                FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_end_time,'%Y%m')," 
+                WHERE roomid <> 0 AND consume_coin <> 0 AND dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+        UNION ALL
+				SELECT NULL,uid,b.roomid,FROM_UNIXTIME(dateline,'%Y%m%d'),consume_coin,consume_type,consume_type_son,consume_id,a.anchor_uid 
+				FROM 
+                (SELECT uid,roomid,dateline,consume_coin,consume_type,consume_type_son,consume_id,anchor_uid
+                FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_start_time,'%Y%m')," 
+                WHERE roomid = 0 AND consume_coin <> 0 AND consume_type  = 10 and consume_id  in (146,147)
+				        AND dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+                UNION ALL
+                SELECT uid,roomid,dateline,consume_coin,consume_type,consume_type_son,consume_id,anchor_uid
+                FROM showself_statistics_wild_user_consume_",FROM_UNIXTIME(p_end_time,'%Y%m'),"  
+                WHERE roomid = 0 AND consume_coin <> 0 AND consume_type  = 10 and consume_id  in (146,147)
+				        AND dateline BETWEEN ",p_start_time," AND ",p_end_time,") a
+                inner JOIN (SELECT roomid,anchor_uid from shall_rpt_anchor_workload_band_4realcal GROUP BY anchor_uid) b ON a.anchor_uid = b.anchor_uid
+				UNION ALL
+        SELECT  null,u.sender as uid,
+							 u.roomid ,
+							 FROM_UNIXTIME(u.dateline,'%Y%m%d') AS dateline,
+							 u.spendmoney as consume_coin,
+							 15 as consume_type,
+							 u.cust_gift_id as consume_type_son,
+							 u.admin_gift_id as consume_id,
+							 u.uid as anchor_uid
+				FROM shall_cust_user_rcv_gift u
+				WHERE u.note = 'bag' and u.dateline  BETWEEN ",p_start_time," AND ",p_end_time,"
+				;");
+	END IF;		
+  PREPARE STMT FROM @p_sql;   
+	EXECUTE STMT;
+
+  		SET @p_sql := CONCAT("UPDATE xiuse_consume_hu_tmp SET consume_type = 11 
+								WHERE consume_type  = 12 and consume_id in (274,275,276,277,278,279,280,294,353);");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+ 
+      TRUNCATE TABLE  xiuse_first_visitor_hu_tmp;
+      SET @p_sql := CONCAT("insert into xiuse_first_visitor_hu_tmp()
+			          SELECT null,idfa,FROM_UNIXTIME(dateline,'%Y%m%d')
+								FROM activation 
+								WHERE dateline BETWEEN ",p_start_time," - 30*24*3600 AND ",p_end_time,";
+								");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      TRUNCATE TABLE  consume_user_tmp;
+			SET @p_sql := CONCAT("INSERT INTO consume_user_tmp()
+									SELECT null,uid,idfa,left(channelid,5) 
+									FROM register
+									WHERE uid in (SELECT uid FROM xiuse_consume_hu_tmp GROUP BY uid);
+								");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      TRUNCATE TABLE  xiuse_consume_user_hu_tmp;
+      		SET @p_sql := CONCAT("INSERT INTO xiuse_consume_user_hu_tmp()
+																SELECT null,uid,t1.idfa,t2.dateline,CASE WHEN t2.idfa is NULL THEN 2 ELSE 1 END,
+																CASE WHEN LEFT(channel_id,5) = '10301' THEN 1 ELSE 2 END
+                                FROM consume_user_tmp t1  LEFT JOIN xiuse_first_visitor_hu_tmp t2 ON t1.idfa =t2.idfa;
+								");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      TRUNCATE TABLE  user_long_room_tmp;
+	IF FROM_UNIXTIME(p_start_time,'%Y%m')=FROM_UNIXTIME(p_end_time,'%Y%m') THEN
+			SET @p_sql := CONCAT("INSERT INTO user_long_room_tmp()
+				select null,uid,roomid,idfa,longs,channel_id 
+        from showself_user_valid_long_room_",FROM_UNIXTIME(p_end_time,'%Y%m'),"
+        where dateline BETWEEN ",p_start_time," AND ",p_end_time,"  
+				;");
+	ELSE
+			SET @p_sql := CONCAT("INSERT INTO user_long_room_tmp()
+				select null,uid,roomid,idfa,longs,channel_id 
+        from showself_user_valid_long_room_",FROM_UNIXTIME(p_start_time,'%Y%m'),"
+        where dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+				union all
+				select null,uid,roomid,idfa,longs,channel_id 
+        from showself_user_valid_long_room_",FROM_UNIXTIME(p_end_time,'%Y%m'),"
+        where dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+				;");
+	  END IF;	
+		PREPARE STMT FROM @p_sql;  
+		EXECUTE STMT;
+
+    #TRUNCATE TABLE  visitor_long_room_tmp;
+	#IF FROM_UNIXTIME(p_start_time,'%Y%m')=FROM_UNIXTIME(p_end_time,'%Y%m') THEN
+			#SET @p_sql := CONCAT("INSERT INTO visitor_long_room_tmp()
+				#select null,roomid,idfa,longs,channel_id 
+        #from showself_visitor_valid_long_room_",FROM_UNIXTIME(p_end_time,'%Y%m'),"
+        #where dateline BETWEEN ",p_start_time," AND ",p_end_time,"  
+				#;");
+	#ELSE
+			#SET @p_sql := CONCAT("INSERT INTO visitor_long_room_tmp()
+				#select null,roomid,idfa,longs,channel_id
+       # from showself_visitor_valid_long_room_",FROM_UNIXTIME(p_start_time,'%Y%m'),"
+        #where dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+				#union all
+				#select null,roomid,idfa,longs,channel_id 
+        #from showself_visitor_valid_long_room_",FROM_UNIXTIME(p_end_time,'%Y%m'),"
+        #where dateline BETWEEN ",p_start_time," AND ",p_end_time,"
+				#;");
+	  #END IF;	
+		#PREPARE STMT FROM @p_sql;  
+		#EXECUTE STMT;
+
+SET @p_sql := CONCAT("
+INSERT INTO xiuse_roomstatistic_new_rule()
+SELECT null,",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,a.roomid,longs,0,0,uid_count,uid_count_5,
+uid_count_12345,uid_count_1,uid_count_2,uid_count_3,uid_count_4,uid_count_6,
+consume_coin_12345,consume_coin_1,consume_coin_2,consume_coin_3,consume_coin_4,consume_coin_5,
+room_first_num,room_first_money,room_second_num,consume_coin_12345 - room_first_money,uid_count_15,consume_coin_15
+FROM
+(select  b.roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt BETWEEN ",p_start_time," AND ",p_end_time,"  group by roomid having longs > 7 ) a
+left join 
+(SELECT   roomid,
+	    COUNT(DISTINCT t1.idfa)  idfa_count, 
+      COUNT(DISTINCT CASE WHEN t1.longs >= 300 THEN t1.idfa END ) idfa_count_5      
+FROM
+(
+SELECT idfa,roomid,longs FROM user_long_room_tmp  
+UNION ALL
+SELECT idfa,roomid,longs FROM visitor_long_room_tmp
+) t1   group by roomid ) c ON a.roomid = c.roomid
+left join
+(SELECT  roomid,
+      COUNT(DISTINCT uid) uid_count,
+      COUNT(DISTINCT CASE WHEN longs >= 300 THEN uid END ) uid_count_5     
+FROM user_long_room_tmp  
+group by roomid ) d   ON a.roomid = d.roomid
+left join
+(
+select t1.roomid,
+              COUNT(DISTINCT CASE WHEN t1.consume_coin <> 0  THEN t1.uid END) uid_count_12345,
+              COUNT(DISTINCT CASE WHEN t1.consume_type = 11  THEN t1.uid END) uid_count_1,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 12 and consume_id not in (2001) THEN t1.uid END) uid_count_2,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 13  THEN t1.uid END) uid_count_3,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 14  THEN t1.uid END) uid_count_4,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 15  THEN t1.uid END) uid_count_15,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 10 and consume_id  in (147,146) THEN t1.uid END) uid_count_6,
+              SUM(CASE WHEN t1.consume_coin <> 0  THEN t1.consume_coin END) consume_coin_12345,
+							SUM(CASE WHEN t1.consume_type = 11  THEN t1.consume_coin END) consume_coin_1,
+							SUM(CASE WHEN t1.consume_type  = 12 and consume_id not in (2001)  THEN t1.consume_coin END) consume_coin_2,
+							SUM(CASE WHEN t1.consume_type  = 13 THEN t1.consume_coin END) consume_coin_3,
+							SUM(CASE WHEN t1.consume_type  = 14 THEN t1.consume_coin END) consume_coin_4,
+              SUM(CASE WHEN t1.consume_type  = 15 THEN t1.consume_coin END) consume_coin_15,
+              SUM(CASE WHEN t1.consume_type  = 10 and consume_id  in (146,147)  THEN t1.consume_coin END) consume_coin_5
+ from xiuse_consume_hu_tmp t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+ group by t1.roomid 
+) e
+ON a.roomid = e.roomid
+left JOIN
+(
+select roomid,sum(a.consume_coin) room_first_money,count(a.uid) room_first_num
+from
+(select t1.roomid,t1.uid,t1.consume_coin
+FROM
+xiuse_consume_hu_tmp  t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+WHERE  t1.consume_coin <> 0
+GROUP BY t1.roomid,t1.uid) a
+GROUP BY a.roomid
+) h
+ON a.roomid = h.roomid
+left join
+(select roomid,count(a.uid) room_second_num
+FROM
+(select t1.roomid,t1.uid,sum(t1.consume_coin) m,count(t1.uid)
+FROM xiuse_consume_hu_tmp t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+WHERE  t1.consume_coin <> 0
+GROUP BY t1.roomid,t1.uid
+HAVING count(t1.uid) > 1) a
+GROUP BY a.roomid) i
+ON a.roomid = i.roomid;");
+PREPARE STMT FROM @p_sql;   
+EXECUTE STMT;
+
+
+
+SET @p_sql := CONCAT("
+INSERT INTO xiuse_roomstatistic_new_rule()
+SELECT null,",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,a.roomid,longs,0,0,uid_count,uid_count_5,
+uid_count_12345,uid_count_1,uid_count_2,uid_count_3,uid_count_4,uid_count_6,
+consume_coin_12345,consume_coin_1,consume_coin_2,consume_coin_3,consume_coin_4,consume_coin_5,
+room_first_num,room_first_money,room_second_num,consume_coin_12345 - room_first_money,uid_count_15,consume_coin_15
+FROM
+(select  b.roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt between  ",p_start_time," AND ",p_end_time," group by roomid having longs > 7) a
+left join 
+(SELECT   roomid,
+	    COUNT(DISTINCT t1.idfa)  idfa_count, 
+      COUNT(DISTINCT CASE WHEN t1.longs >= 300 THEN t1.idfa END ) idfa_count_5      
+FROM
+(
+SELECT idfa,roomid,longs FROM user_long_room_tmp   
+UNION ALL
+SELECT idfa,roomid,longs FROM visitor_long_room_tmp   
+) t1 INNER JOIN xiuse_first_visitor_hu_tmp t4 ON  t1.idfa = t4.idfa  group by roomid ) c ON a.roomid = c.roomid
+left join
+(SELECT  roomid,
+      COUNT(DISTINCT t1.uid) uid_count,
+      COUNT(DISTINCT CASE WHEN longs >= 300 THEN t1.uid END ) uid_count_5     
+FROM  user_long_room_tmp t1 INNER JOIN xiuse_first_visitor_hu_tmp t4 ON  t1.idfa = t4.idfa group by roomid ) d   ON a.roomid = d.roomid
+left join
+(
+select t1.roomid,
+              COUNT(DISTINCT CASE WHEN t1.consume_coin <> 0  THEN t1.uid END) uid_count_12345,
+              COUNT(DISTINCT CASE WHEN t1.consume_type = 11  THEN t1.uid END) uid_count_1,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 12 and consume_id not in (2001) THEN t1.uid END) uid_count_2,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 13  THEN t1.uid END) uid_count_3,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 14  THEN t1.uid END) uid_count_4,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 15  THEN t1.uid END) uid_count_15,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 10 and consume_id  in (147,146) THEN t1.uid END) uid_count_6,
+							SUM(CASE WHEN t1.consume_type = 11  THEN t1.consume_coin END) consume_coin_1,
+              SUM(CASE WHEN t1.consume_coin <> 0  THEN t1.consume_coin END) consume_coin_12345,
+							SUM(CASE WHEN t1.consume_type  = 12 and consume_id not in (2001)  THEN t1.consume_coin END) consume_coin_2,
+							SUM(CASE WHEN t1.consume_type  = 13 THEN t1.consume_coin END) consume_coin_3,
+							SUM(CASE WHEN t1.consume_type  = 14 THEN t1.consume_coin END) consume_coin_4,
+              SUM(CASE WHEN t1.consume_type  = 15 THEN t1.consume_coin END) consume_coin_15, 
+              SUM(CASE WHEN t1.consume_type  = 10 and consume_id  in (146,147)  THEN t1.consume_coin END) consume_coin_5
+ from xiuse_consume_hu_tmp t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+ AND is_new = 1
+ group by t1.roomid 
+) e
+ON a.roomid = e.roomid
+left JOIN
+(
+select roomid,sum(a.consume_coin) room_first_money,count(a.uid) room_first_num
+from
+(select t1.roomid,t1.uid,t1.consume_coin
+FROM
+xiuse_consume_hu_tmp  t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+WHERE   is_new = 1
+and t1.consume_coin <> 0
+GROUP BY t1.roomid,t1.uid) a
+GROUP BY a.roomid
+) h
+ON a.roomid = h.roomid
+left join
+(select roomid,count(a.uid) room_second_num
+FROM
+(select t1.roomid,t1.uid,sum(t1.consume_coin) m,count(t1.uid)
+FROM xiuse_consume_hu_tmp t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+WHERE  is_new = 1
+and t1.consume_coin <> 0
+GROUP BY t1.roomid,t1.uid
+HAVING count(t1.uid) > 1) a
+GROUP BY a.roomid) i
+ON a.roomid = i.roomid;");
+PREPARE STMT FROM @p_sql;   
+EXECUTE STMT;
+
+SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,visitor_num,5min_visitor_num,user_num,5min_user_num)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,COUNT(DISTINCT c.idfa),COUNT(DISTINCT CASE WHEN c.longs>=300 THEN c.idfa END),
+COUNT(DISTINCT c.uid),COUNT(DISTINCT CASE WHEN c.longs>=300 THEN c.uid END)
+FROM
+(select  b.roomid,sum(total)/3600 time from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having time >7 ) a
+LEFT JOIN
+(SELECT   t1.roomid,t1.idfa,t1.longs,t1.uid   
+FROM
+(
+SELECT idfa,roomid,longs,uid FROM user_long_room_tmp 
+) t1  INNER JOIN xiuse_first_visitor_hu_tmp t4 ON  t1.idfa = t4.idfa ) c ON a.roomid = c.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,consume_num,game_num,gift_num,diange_num,redbag_num,bag_num,shouhu_num,game_money,consume_money,gift_money,diange_money,redbag_money,bag_mon,shouhu_money)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,
+              COUNT(DISTINCT CASE WHEN t1.consume_coin <> 0  THEN t1.uid END) uid_count_12345,
+              COUNT(DISTINCT CASE WHEN t1.consume_type = 11  THEN t1.uid END) uid_count_1,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 12 and consume_id not in (2001) THEN t1.uid END) uid_count_2,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 13  THEN t1.uid END) uid_count_3,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 14  THEN t1.uid END) uid_count_4,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 15  THEN t1.uid END) uid_count_15,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 10 and consume_id  in (147,146) THEN t1.uid END) uid_count_6,
+							SUM(CASE WHEN t1.consume_type = 11  THEN t1.consume_coin END) consume_coin_1,
+              SUM(CASE WHEN t1.consume_coin <> 0  THEN t1.consume_coin END) consume_coin_12345,
+							SUM(CASE WHEN t1.consume_type  = 12 and consume_id not in (2001)  THEN t1.consume_coin END) consume_coin_2,
+							SUM(CASE WHEN t1.consume_type  = 13 THEN t1.consume_coin END) consume_coin_3,
+							SUM(CASE WHEN t1.consume_type  = 14 THEN t1.consume_coin END) consume_coin_4,
+              SUM(CASE WHEN t1.consume_type  = 15 THEN t1.consume_coin END) consume_coin_15, 
+              SUM(CASE WHEN t1.consume_type  = 10 and consume_id  in (146,147)  THEN t1.consume_coin END) consume_coin_5
+FROM
+(select  roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having longs >7) a
+INNER join
+(
+select t1.*
+ from xiuse_consume_hu_tmp t1 INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+  AND is_new = 1
+) t1
+ON a.roomid = t1.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,room_first_num,room_first_money,room_second_num,room_second_money)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,COUNT(DISTINCT a),COUNT(DISTINCT CASE WHEN b >1 THEN a END),sum(c),sum(d) 
+FROM
+(select  roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having longs >7) b
+left join
+(select t1.roomid,t1.uid a,count(t1.uid) b,consume_coin c,sum(consume_coin) d
+from xiuse_consume_hu_tmp t1 
+INNER JOIN xiuse_consume_user_hu_tmp t2 ON   t1.uid = t2.uid 
+AND is_new = 1
+GROUP BY t1.roomid,t1.uid) a ON a.roomid = b.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,roomid,long_time)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,COUNT(DISTINCT a.roomid),sum(time)
+FROM
+(select  b.roomid,sum(total)/3600 time from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having time >7) a;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+
+SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,roomid,long_time)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,COUNT(DISTINCT a.roomid),sum(time)
+FROM
+(select  b.roomid,sum(total)/3600 time from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having time >7) a;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+
+SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,visitor_num,5min_visitor_num,user_num,5min_user_num)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,COUNT(DISTINCT c.idfa),COUNT(DISTINCT CASE WHEN c.longs>=300 THEN c.idfa END),
+COUNT(DISTINCT c.uid),COUNT(DISTINCT CASE WHEN c.longs>=300 THEN c.uid END)
+FROM
+(select  b.roomid,sum(total)/3600 time from	shall_rpt_anchor_workload_band_4realcal b
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having time >7 ) a
+LEFT JOIN
+user_long_room_tmp c  ON a.roomid = c.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,consume_num,game_num,gift_num,diange_num,redbag_num,bag_num,shouhu_num,game_money,consume_money,gift_money,diange_money,redbag_money,bag_mon,shouhu_money)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,
+              COUNT(DISTINCT CASE WHEN t1.consume_coin <> 0  THEN t1.uid END) uid_count_12345,
+              COUNT(DISTINCT CASE WHEN t1.consume_type = 11  THEN t1.uid END) uid_count_1,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 12 and consume_id not in (2001) THEN t1.uid END) uid_count_2,
+							COUNT(DISTINCT CASE WHEN t1.consume_type  = 13  THEN t1.uid END) uid_count_3,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 14  THEN t1.uid END) uid_count_4,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 15  THEN t1.uid END) uid_count_15,
+              COUNT(DISTINCT CASE WHEN t1.consume_type  = 10 and consume_id  in (147,146) THEN t1.uid END) uid_count_6,
+							SUM(CASE WHEN t1.consume_type = 11  THEN t1.consume_coin END) consume_coin_1,
+              SUM(CASE WHEN t1.consume_coin <> 0  THEN t1.consume_coin END) consume_coin_12345,
+							SUM(CASE WHEN t1.consume_type  = 12 and consume_id not in (2001)  THEN t1.consume_coin END) consume_coin_2,
+							SUM(CASE WHEN t1.consume_type  = 13 THEN t1.consume_coin END) consume_coin_3,
+							SUM(CASE WHEN t1.consume_type  = 14 THEN t1.consume_coin END) consume_coin_4,
+              SUM(CASE WHEN t1.consume_type  = 15 THEN t1.consume_coin END) consume_coin_15, 
+              SUM(CASE WHEN t1.consume_type  = 10 and consume_id  in (146,147)  THEN t1.consume_coin END) consume_coin_5
+FROM
+(select  roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having longs >7) a
+INNER join
+(
+select t1.*
+ from xiuse_consume_hu_tmp t1 
+) t1
+ON a.roomid = t1.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_kuatiantongji_tmp(start_time,end_time,is_new,room_first_num,room_first_money,room_second_num,room_second_money)
+SELECT ",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,COUNT(DISTINCT a),COUNT(DISTINCT CASE WHEN b >1 THEN a END),sum(c),sum(d) 
+FROM
+(select  roomid,sum(total)/3600 longs from	shall_rpt_anchor_workload_band_4realcal
+where start_dt between ",p_start_time," AND ",p_end_time," group by roomid having longs >7) b
+left join
+(select t1.roomid,t1.uid a,count(t1.uid) b,consume_coin c,sum(consume_coin) d
+from xiuse_consume_hu_tmp t1 
+GROUP BY t1.roomid,t1.uid) a ON a.roomid = b.roomid;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_roomstatistic_new_rule()
+SELECT null,",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",1,
+sum(roomid),SUM(long_time),0,0,SUM(user_num),SUM(5min_user_num),SUM(consume_num),SUM(game_num),
+sum(gift_num),SUM(diange_num),SUM(redbag_num),SUM(shouhu_num),
+sum(consume_money),SUM(game_money), SUM(gift_money),SUM(diange_money),SUM(redbag_money),SUM(shouhu_money),
+SUM(room_first_num),SUM(room_second_num),sum(room_first_money),sum(room_second_money),
+SUM(bag_num),SUM(bag_mon)
+FROM xiuse_kuatiantongji_tmp WHERE start_time = ",FROM_UNIXTIME(p_start_time,'%Y%m%d')," AND is_new = 1;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+      SET @p_sql := CONCAT("INSERT INTO xiuse_roomstatistic_new_rule()
+SELECT null,",FROM_UNIXTIME(p_start_time,'%Y%m%d'),",",FROM_UNIXTIME(p_end_time,'%Y%m%d'),",2,
+sum(roomid),SUM(long_time),0,0,SUM(user_num),SUM(5min_user_num),SUM(consume_num),SUM(game_num),
+sum(gift_num),SUM(diange_num),SUM(redbag_num),SUM(shouhu_num),
+sum(consume_money),SUM(game_money), SUM(gift_money),SUM(diange_money),SUM(redbag_money),SUM(shouhu_money),
+SUM(room_first_num),SUM(room_second_num),sum(room_first_money),sum(room_second_money),
+SUM(bag_num),SUM(bag_mon)
+FROM xiuse_kuatiantongji_tmp WHERE start_time = ",FROM_UNIXTIME(p_start_time,'%Y%m%d')," AND is_new = 2;");
+			PREPARE STMT FROM @p_sql;   
+			EXECUTE STMT;
+
+
+
+
+    UPDATE showself_statistics_task_def SET start_time=p_end_time+1,end_time=p_end_time+(p_period*24*60*60), update_time=UNIX_TIMESTAMP() WHERE id=p_id;
+     
+    END IF;
+  UNTIL v_done 
+  END REPEAT;
+  CLOSE v_new_statistics_cursor;
+END
